@@ -1,0 +1,80 @@
+# Operational snapshot for agents. Product meaning: agent/SPEC.md.
+# Live-test services: docker-compose.test.yaml.
+
+project:
+  name: Fire Factory
+  primary_language: TypeScript
+  firebase_project_id: fire-factory   # replace on fork
+
+stack:
+  language_version: "22"
+  package_manager: npm
+  workspaces:
+    - functions
+    - scripts
+  framework_web: next@15 (App Router)
+  framework_api: express on firebase-functions v2
+  validation: zod
+  canonical_store: cloud_firestore
+  files: cloud_storage
+  auth: firebase_auth
+  hosting: firebase_app_hosting   # root = frontend/, when connected
+  node_engines: ">=22 <23"
+
+services:
+  frontend:
+    purpose: Next.js shell (sign-in and session)
+    default_port: 3000
+    package: frontend
+  functions:
+    purpose: Privileged HTTPS API
+    default_port: 5001
+    package: functions
+    health_path: /health
+  firebase_emulators:
+    purpose: Local Auth, Firestore, Functions, Storage
+    ui_port: 4000
+    hub_port: 4400
+    functions_port: 5001
+    firestore_port: 8080
+    auth_port: 9099
+    storage_port: 9199
+  scripts:
+    purpose: Operator Admin SDK tooling
+    package: scripts
+
+commands:
+  install: "npm install && npm --prefix frontend install"
+  build: "npm run build"
+  dev: "npm run dev"
+  dev_api: "npm run dev:api"
+  dev_emulators_host: "npm run dev:emulators"
+  test: "npm test"
+  test_live: "npm run test:emulator"
+  lint: "npm run lint"
+  typecheck: "npm run typecheck"
+  emulators_up: "npm run emulators:up"
+  emulators_down: "npm run emulators:down"
+  create_admin: "npm run create-admin --"
+  production_posture: "npm run production-posture --"
+  set_project: "npm run set-project --"
+
+live_tests:
+  compose_file: docker-compose.test.yaml
+  image: docker/emulators.Dockerfile
+  up: "npm run emulators:up"
+  down: "npm run emulators:down"
+  test: "npm run test:emulator"
+  env:
+    FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080"
+    FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099"
+    STORAGE_EMULATOR_HOST: "127.0.0.1:9199"
+    FB_PROJECT_ID: fire-factory
+
+config:
+  env_example: ".env.example"
+  frontend_env_example: "frontend/.env.example"
+  functions_env_example: "functions/.env.example"
+  firebaserc: .firebaserc
+  firebase_json: firebase.json
+  setup: SETUP.md

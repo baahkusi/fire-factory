@@ -1,0 +1,4 @@
+lib/
+.env
+.dev.env
+.prod.env

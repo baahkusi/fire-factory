@@ -1,0 +1,44 @@
+rules_version = '2';
+
+// Fire Factory — client SDK is closed by default.
+// Product data is written by Cloud Functions with the Admin SDK, which
+// bypasses these rules. Add a match only for a read the browser truly needs.
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isSelf(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isPrivileged() {
+      return signedIn() &&
+        request.auth.token.roles is list &&
+        (
+          'admin' in request.auth.token.roles ||
+          'operator' in request.auth.token.roles
+        );
+    }
+
+    match /profiles/{uid} {
+      allow read: if isSelf(uid) || isPrivileged();
+      allow write: if false;
+    }
+
+    match /staff/{email} {
+      allow read: if isPrivileged();
+      allow write: if false;
+    }
+
+    match /audit/{id} {
+      allow read, write: if false;
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

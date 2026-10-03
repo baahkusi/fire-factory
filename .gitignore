@@ -1,0 +1,43 @@
+# Logs
+logs
+*.log
+npm-debug.log*
+firebase-debug.log*
+firebase-debug.*.log*
+firestore-debug.log
+ui-debug.log
+pglite-debug.log
+
+# Firebase cache and emulator export
+.firebase/
+
+# Runtime data
+pids
+*.pid
+*.seed
+coverage
+.nyc_output
+
+# Dependencies
+node_modules/
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+!functions/.env.example
+!frontend/.env.example
+functions/.dev.env
+functions/.prod.env
+functions/.env
+frontend/.env.local
+scripts/*-firebase-adminsdk-*.json
+**/*firebase-adminsdk*.json
+
+# Build output
+frontend/.next/
+functions/lib/
+
+# OS / editor
+.DS_Store
+*.tsbuildinfo

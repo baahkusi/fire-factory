@@ -1,0 +1,50 @@
+rules_version = '2';
+
+// Fire Factory — Cloud Storage.
+// Prefer signed URLs from Cloud Functions. Direct client writes are limited
+// to the signed-in user's own prefix.
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function isPrivileged() {
+      return signedIn() &&
+        request.auth.token.roles is list &&
+        (
+          'admin' in request.auth.token.roles ||
+          'operator' in request.auth.token.roles
+        );
+    }
+
+    function safeUpload() {
+      return request.resource.size < 25 * 1024 * 1024
+        && request.resource.contentType.matches(
+          'image/(png|jpeg|webp)|application/pdf|text/plain'
+        )
+        && !request.resource.contentType.matches(
+          '.*(svg|html|javascript).*'
+        );
+    }
+
+    match /users/{uid}/{allPaths=**} {
+      allow read: if isOwner(uid) || isPrivileged();
+      allow write: if isOwner(uid) && safeUpload();
+    }
+
+    match /public/{allPaths=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

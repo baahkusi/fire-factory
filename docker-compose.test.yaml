@@ -1,0 +1,45 @@
+# Live / integration test environment for Fire Factory.
+#
+# Runs the Firebase Emulator Suite (Auth, Firestore, Functions, Storage)
+# inside Docker, so the host does not need a Java runtime.
+#
+#   npm run emulators:up
+#   npm run test:emulator
+#   npm run emulators:down
+#
+# Emulator data is ephemeral. No production secrets belong here.
+
+name: fire-factory-test
+
+services:
+  emulators:
+    build:
+      context: .
+      dockerfile: docker/emulators.Dockerfile
+    container_name: fire-factory-emulators
+    init: true
+    working_dir: /app
+    environment:
+      BROWSER: none
+      GCLOUD_PROJECT: fire-factory
+    volumes:
+      - .:/app
+      - root-node-modules:/app/node_modules
+      - functions-node-modules:/app/functions/node_modules
+    ports:
+      - "4000:4000" # Emulator Suite UI
+      - "4400:4400" # Emulator hub
+      - "5001:5001" # Cloud Functions
+      - "8080:8080" # Firestore
+      - "9099:9099" # Authentication
+      - "9199:9199" # Storage
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://127.0.0.1:4400/"]
+      interval: 5s
+      timeout: 3s
+      retries: 60
+      start_period: 180s
+
+volumes:
+  root-node-modules:
+  functions-node-modules:
