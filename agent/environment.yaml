@@ -5,6 +5,7 @@ project:
   name: Fire Factory
   primary_language: TypeScript
   firebase_project_id: fire-factory   # replace on fork
+  firebase_region: us-central1
 
 stack:
   language_version: "22"
@@ -58,6 +59,7 @@ commands:
   create_admin: "npm run create-admin --"
   production_posture: "npm run production-posture --"
   set_project: "npm run set-project --"
+  setup_github: "npm run setup-github --"
 
 live_tests:
   compose_file: docker-compose.test.yaml

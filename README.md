@@ -46,7 +46,7 @@ What you get on day one:
 ├── frontend/                 # Next.js shell (own package-lock)
 ├── functions/                # Express API on Cloud Functions v2
 │   └── src/                  # routes, controllers, stores, providers
-├── scripts/                  # set-project, create-admin, production posture
+├── scripts/                  # set-project, setup-github, create-admin, production posture
 └── agent/                    # SPEC, PLAN, INVARIANTS, TEST
 ```
 
@@ -64,8 +64,7 @@ What you get on day one:
 ## Quick commands
 
 ```bash
-npm install
-cd frontend && npm install && cd ..
+npm run install:all
 npm test && npm run lint && npm run typecheck
 npm run dev                     # Next.js + in-memory API
 npm run emulators:up && npm run test:emulator && npm run emulators:down

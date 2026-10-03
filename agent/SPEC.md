@@ -309,10 +309,12 @@ for that step. Maintenance is a human declaration, one file per request under
 
 ## 12. Fork checklist (human)
 
-1. New git remote. New Firebase project id in `.firebaserc` and env examples.
-2. Firestore location chosen before first create.
-3. Web keys in `frontend/.env.local`.
-4. `npm test` green.
-5. §1.4 written and approved.
-6. Plan steps appended. Implementation notes filled. No step marked approved
-   by the agent.
+1. **Clone repo:** `git clone <remote> && npm run install:all`.
+2. **Run setup:** `npm run set-project` (sets project ID, display name, data center region, generates env files).
+3. **Run github:** `npm run setup-github` (CI workflows, App Hosting config, GCP IAM service account & secrets).
+4. **Deploy base:** Deploy base skeleton (via GitHub push or `npm run deploy:base`), verify posture (`npm run production-posture`), grant first admin (`npm run create-admin`).
+5. **Define specs:** Replace §1.4 ("Product slot") with the product description and approve it.
+6. **Remaining steps generate:** Ask agent to append rows to `agent/PLAN.md` and draft `agent/implementation/NN-*.md` notes.
+7. **Finish work & deploy:** Build bottom-up, verify with tests, human approves each step, push to deploy.
+8. **Enter maintenance:** Declare `Maintenance` phase in `agent/PLAN.md`.
+9. **Keep updating:** Handle subsequent changes one-by-one under `agent/maintenance/`.

@@ -4,7 +4,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Fire Factory",
-  description: "Firebase starting base for a software factory.",
+  description: "Fire Factory on Firebase.",
 };
 
 export default function RootLayout({children}: {children: ReactNode}) {

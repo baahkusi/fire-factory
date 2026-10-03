@@ -7,6 +7,7 @@
     "create-admin": "ts-node bootstrap/create-admin.ts",
     "production-posture": "ts-node verify/production-posture.ts",
     "set-project": "ts-node bootstrap/set-project.ts",
+    "setup-github": "ts-node bootstrap/setup-github.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
