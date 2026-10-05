@@ -10,6 +10,21 @@ runConfig:
 
 # Environment variables injected at build and runtime
 env:
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: "1:932549479910:web:771418412bc100b02f1a27"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "932549479910"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: "AIzaSyAGrOFqSmuZwHGdtWI0CI45KNpG0HG6r-w"
+    availability:
+      - BUILD
+      - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
     value: "fire-factory-si"
     availability:
