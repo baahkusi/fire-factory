@@ -22,7 +22,7 @@
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { spawnSync } from "node:child_process";
+import { execSync, spawnSync } from "node:child_process";
 import { ask, confirm } from "../utils/prompt";
 import { provisionFirebaseProject } from "./provision-firebase";
 
