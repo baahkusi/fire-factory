@@ -642,76 +642,163 @@ async function main() {
         );
       }
       if (runGcloud) {
+        // Pre-check access to the project
+        let activeAccount = "";
         try {
-          // eslint-disable-next-line no-console
-          console.log("Creating service account 'github-deployer'...");
-          execSync(
-            `gcloud iam service-accounts create github-deployer --project="${projectId}" --description="Deploys Firebase Functions and Rules"`,
-            { stdio: "inherit" }
-          );
+          activeAccount = execSync("gcloud config get-value account", {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "ignore"],
+          }).trim();
         } catch {
-          // eslint-disable-next-line no-console
-          console.log("Notice: Service account github-deployer may already exist, proceeding...");
+          // ignore
         }
 
-        const roles = [
-          "roles/cloudfunctions.admin",
-          "roles/iam.serviceAccountUser",
-          "roles/firebaserules.admin",
-          "roles/datastore.user",
-          "roles/storage.admin",
-        ];
-        for (const role of roles) {
+        let hasProjectAccess = false;
+        try {
+          execSync(`gcloud projects describe "${projectId}"`, {
+            stdio: ["ignore", "pipe", "ignore"],
+          });
+          hasProjectAccess = true;
+        } catch {
           // eslint-disable-next-line no-console
-          console.log(`Granting ${role}...`);
-          try {
-            execSync(
-              `gcloud projects add-iam-policy-binding "${projectId}" --member="serviceAccount:github-deployer@${projectId}.iam.gserviceaccount.com" --role="${role}"`,
-              { stdio: "ignore" }
-            );
-          } catch (e) {
+          console.warn(`\n⚠️  Google Cloud access denied or project not found for "${projectId}".`);
+          if (activeAccount) {
             // eslint-disable-next-line no-console
-            console.warn(`Warning: Could not bind ${role}:`, e instanceof Error ? e.message : e);
+            console.warn(`   Authenticated in gcloud as: ${activeAccount}`);
+          }
+          // eslint-disable-next-line no-console
+          console.log("\n   Possible causes:");
+          // eslint-disable-next-line no-console
+          console.log(`   1. Account mismatch: Was ${projectId} created under a different Google account?`);
+          // eslint-disable-next-line no-console
+          console.log("      Run 'gcloud auth list' to see accounts, or 'gcloud auth login' to switch.");
+          // eslint-disable-next-line no-console
+          console.log(`   2. Missing IAM role: Grant ${activeAccount || "your email"} 'Owner' or 'Editor' in Google Cloud Console:`);
+          // eslint-disable-next-line no-console
+          console.log(`      https://console.cloud.google.com/iam-admin/iam?project=${projectId}`);
+          // eslint-disable-next-line no-console
+          console.log("   3. Project ID mismatch: Check Firebase Console -> Project Settings -> General -> Project ID.\n");
+
+          if (process.stdin.isTTY && !isAutoYes) {
+            const reauth = await confirm(
+              "Would you like to log in to the account that owns this Firebase project now ('gcloud auth login')?",
+              true
+            );
+            if (reauth) {
+              spawnSync("gcloud", ["auth", "login"], { stdio: "inherit" });
+              try {
+                execSync(`gcloud projects describe "${projectId}"`, {
+                  stdio: ["ignore", "pipe", "ignore"],
+                });
+                hasProjectAccess = true;
+                // eslint-disable-next-line no-console
+                console.log(`✔ Access verified for project ${projectId}!`);
+              } catch {
+                // eslint-disable-next-line no-console
+                console.warn(`Could not verify access to ${projectId}. Skipping service account creation.`);
+              }
+            }
           }
         }
 
-        const keyPath = path.join(REPO_ROOT, "github-key.json");
-        // eslint-disable-next-line no-console
-        console.log("Generating service account key...");
-        execSync(
-          `gcloud iam service-accounts keys create "${keyPath}" --iam-account="github-deployer@${projectId}.iam.gserviceaccount.com" --project="${projectId}"`,
-          { stdio: "inherit" }
-        );
+        if (hasProjectAccess) {
+          let serviceAccountReady = false;
+          try {
+            // eslint-disable-next-line no-console
+            console.log("Creating service account 'github-deployer'...");
+            execSync(
+              `gcloud iam service-accounts create github-deployer --project="${projectId}" --description="Deploys Firebase Functions and Rules"`,
+              { stdio: "inherit" }
+            );
+            serviceAccountReady = true;
+          } catch {
+            try {
+              execSync(
+                `gcloud iam service-accounts describe "github-deployer@${projectId}.iam.gserviceaccount.com" --project="${projectId}"`,
+                { stdio: "ignore" }
+              );
+              // eslint-disable-next-line no-console
+              console.log("Notice: Service account github-deployer already exists, proceeding...");
+              serviceAccountReady = true;
+            } catch {
+              // eslint-disable-next-line no-console
+              console.warn("\n❌ Service account 'github-deployer' could not be created or accessed.");
+              // eslint-disable-next-line no-console
+              console.warn("Skipping IAM bindings and key generation for now.");
+            }
+          }
 
-        const hasGh = commandExists("gh");
-        if (hasGh) {
-          // eslint-disable-next-line no-console
-          console.log("Setting FIREBASE_SERVICE_ACCOUNT in GitHub Repository Secrets via gh CLI...");
-          execSync(`gh secret set FIREBASE_SERVICE_ACCOUNT < "${keyPath}"`, {
-            cwd: REPO_ROOT,
-            stdio: "inherit",
-          });
-          fs.unlinkSync(keyPath);
-          // eslint-disable-next-line no-console
-          console.log("✔ Secret FIREBASE_SERVICE_ACCOUNT set in GitHub!");
-        } else if (process.platform === "darwin" && commandExists("pbcopy")) {
-          execSync(`pbcopy < "${keyPath}"`);
-          fs.unlinkSync(keyPath);
-          // eslint-disable-next-line no-console
-          console.log("\n✔ Service account JSON key copied to your clipboard via pbcopy!");
-          const ghDetails = remote ? parseGitHubRepo(remote) : null;
-          const secretUrl = ghDetails
-            ? `https://github.com/${ghDetails.owner}/${ghDetails.repo}/settings/secrets/actions/new`
-            : "https://github.com/<owner>/<repo>/settings/secrets/actions/new";
-          // eslint-disable-next-line no-console
-          console.log(`  Go to: ${secretUrl}`);
-          // eslint-disable-next-line no-console
-          console.log("  Add Secret Name: FIREBASE_SERVICE_ACCOUNT");
-          // eslint-disable-next-line no-console
-          console.log("  Paste key: Cmd+V");
+          if (serviceAccountReady) {
+            const roles = [
+              "roles/cloudfunctions.admin",
+              "roles/iam.serviceAccountUser",
+              "roles/firebaserules.admin",
+              "roles/datastore.user",
+              "roles/storage.admin",
+            ];
+            for (const role of roles) {
+              // eslint-disable-next-line no-console
+              console.log(`Granting ${role}...`);
+              try {
+                execSync(
+                  `gcloud projects add-iam-policy-binding "${projectId}" --member="serviceAccount:github-deployer@${projectId}.iam.gserviceaccount.com" --role="${role}"`,
+                  { stdio: "ignore" }
+                );
+              } catch (e) {
+                // eslint-disable-next-line no-console
+                console.warn(`Warning: Could not bind ${role}:`, e instanceof Error ? e.message : e);
+              }
+            }
+
+            const keyPath = path.join(REPO_ROOT, "github-key.json");
+            try {
+              // eslint-disable-next-line no-console
+              console.log("Generating service account key...");
+              execSync(
+                `gcloud iam service-accounts keys create "${keyPath}" --iam-account="github-deployer@${projectId}.iam.gserviceaccount.com" --project="${projectId}"`,
+                { stdio: "inherit" }
+              );
+
+              const hasGh = commandExists("gh");
+              if (hasGh) {
+                // eslint-disable-next-line no-console
+                console.log("Setting FIREBASE_SERVICE_ACCOUNT in GitHub Repository Secrets via gh CLI...");
+                execSync(`gh secret set FIREBASE_SERVICE_ACCOUNT < "${keyPath}"`, {
+                  cwd: REPO_ROOT,
+                  stdio: "inherit",
+                });
+                fs.unlinkSync(keyPath);
+                // eslint-disable-next-line no-console
+                console.log("✔ Secret FIREBASE_SERVICE_ACCOUNT set in GitHub!");
+              } else if (process.platform === "darwin" && commandExists("pbcopy")) {
+                execSync(`pbcopy < "${keyPath}"`);
+                fs.unlinkSync(keyPath);
+                // eslint-disable-next-line no-console
+                console.log("\n✔ Service account JSON key copied to your clipboard via pbcopy!");
+                const ghDetails = remote ? parseGitHubRepo(remote) : null;
+                const secretUrl = ghDetails
+                  ? `https://github.com/${ghDetails.owner}/${ghDetails.repo}/settings/secrets/actions/new`
+                  : "https://github.com/<owner>/<repo>/settings/secrets/actions/new";
+                // eslint-disable-next-line no-console
+                console.log(`  Go to: ${secretUrl}`);
+                // eslint-disable-next-line no-console
+                console.log("  Add Secret Name: FIREBASE_SERVICE_ACCOUNT");
+                // eslint-disable-next-line no-console
+                console.log("  Paste key: Cmd+V");
+              } else {
+                // eslint-disable-next-line no-console
+                console.log(`✔ Key saved to ${keyPath}. Add to GitHub Secrets as FIREBASE_SERVICE_ACCOUNT, then delete.`);
+              }
+            } catch (e) {
+              // eslint-disable-next-line no-console
+              console.warn("Notice: Key generation failed:", e instanceof Error ? e.message : e);
+              // eslint-disable-next-line no-console
+              console.log("You can generate the key manually in the Google Cloud Console under IAM -> Service Accounts.");
+            }
+          }
         } else {
           // eslint-disable-next-line no-console
-          console.log(`✔ Key saved to ${keyPath}. Add to GitHub Secrets as FIREBASE_SERVICE_ACCOUNT, then delete.`);
+          console.log("\nSkipping service account setup for now. You can run './scripts/bootstrap/setup-deployments.sh' once access is granted.\n");
         }
       }
     } else {
