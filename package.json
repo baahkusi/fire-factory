@@ -1,5 +1,5 @@
 {
-  "name": "fire-factory",
+  "name": "fire-factory-si",
   "private": true,
   "version": "0.1.0",
   "description": "Starting base for a Firebase software factory: Keystone agent pack plus a product-free Cloud Functions, Firestore, Auth, and Next.js runtime.",
@@ -21,7 +21,7 @@
     "emulators:logs": "docker compose -f docker-compose.test.yaml logs -f",
     "lint": "npm --prefix frontend run lint && npm run lint --workspace=functions && npm run lint --workspace=scripts",
     "test": "npm --prefix frontend run test && npm run test --workspace=functions",
-    "test:emulator": "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 STORAGE_EMULATOR_HOST=127.0.0.1:9199 FB_PROJECT_ID=fire-factory npm run test --workspace=functions",
+    "test:emulator": "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 STORAGE_EMULATOR_HOST=127.0.0.1:9199 FB_PROJECT_ID=fire-factory-si npm run test --workspace=functions",
     "typecheck": "npm --prefix frontend run typecheck && npm run typecheck --workspace=functions && npm run typecheck --workspace=scripts",
     "deploy:base": "firebase deploy --only firestore:rules,firestore:indexes,storage,functions",
     "deploy:functions": "firebase deploy --only functions",

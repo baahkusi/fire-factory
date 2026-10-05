@@ -11,22 +11,22 @@ runConfig:
 # Environment variables injected at build and runtime
 env:
   - variable: NEXT_PUBLIC_FIREBASE_PROJECT_ID
-    value: "fire-factory"
+    value: "fire-factory-si"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
-    value: "fire-factory.firebaseapp.com"
+    value: "fire-factory-si.firebaseapp.com"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-    value: "fire-factory.firebasestorage.app"
+    value: "fire-factory-si.firebasestorage.app"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_API_BASE_URL
-    value: "https://us-central1-fire-factory.cloudfunctions.net/api"
+    value: "https://us-central1-fire-factory-si.cloudfunctions.net/api"
     availability:
       - BUILD
       - RUNTIME

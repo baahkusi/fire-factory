@@ -4,7 +4,7 @@ import * as path from "node:path";
 export type ScriptMode = "dev" | "emulator" | "prod";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
-const DEFAULT_PROJECT_ID = "fire-factory";
+const DEFAULT_PROJECT_ID = "fire-factory-si";
 
 export function resolveScriptMode(argv = process.argv.slice(2)): ScriptMode {
   const explicitMode = argv.find((argument) => argument.startsWith("--mode="));

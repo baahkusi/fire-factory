@@ -59,7 +59,7 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
 
       - name: Deploy Rules & Indexes
-        run: npx firebase deploy --only firestore:rules,firestore:indexes,storage --project ${{ secrets.FIREBASE_PROJECT_ID || 'fire-factory' }}
+        run: npx firebase deploy --only firestore:rules,firestore:indexes,storage --project ${{ secrets.FIREBASE_PROJECT_ID || 'fire-factory-si' }}
 
       - name: Deploy Cloud Functions
-        run: npx firebase deploy --only functions --project ${{ secrets.FIREBASE_PROJECT_ID || 'fire-factory' }}
+        run: npx firebase deploy --only functions --project ${{ secrets.FIREBASE_PROJECT_ID || 'fire-factory-si' }}

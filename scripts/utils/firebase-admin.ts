@@ -9,7 +9,7 @@ import {
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-const DEFAULT_PROJECT_ID = "fire-factory";
+const DEFAULT_PROJECT_ID = "fire-factory-si";
 
 function isFirebaseAdminSdkJson(name: string): boolean {
   return (

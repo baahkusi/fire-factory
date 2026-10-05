@@ -1,4 +1,4 @@
-export const FACTORY_PROJECT_ID = "fire-factory";
+export const FACTORY_PROJECT_ID = "fire-factory-si";
 
 function isProductionRuntime(): boolean {
   return (

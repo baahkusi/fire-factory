@@ -9,19 +9,19 @@
 #
 # Emulator data is ephemeral. No production secrets belong here.
 
-name: fire-factory-test
+name: fire-factory-si-test
 
 services:
   emulators:
     build:
       context: .
       dockerfile: docker/emulators.Dockerfile
-    container_name: fire-factory-emulators
+    container_name: fire-factory-si-emulators
     init: true
     working_dir: /app
     environment:
       BROWSER: none
-      GCLOUD_PROJECT: fire-factory
+      GCLOUD_PROJECT: fire-factory-si
     volumes:
       - .:/app
       - root-node-modules:/app/node_modules

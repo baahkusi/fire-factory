@@ -2,9 +2,9 @@
 # Live-test services: docker-compose.test.yaml.
 
 project:
-  name: Fire Factory
+  name: Fire Factory Si
   primary_language: TypeScript
-  firebase_project_id: fire-factory   # replace on fork
+  firebase_project_id: fire-factory-si   # replace on fork
   firebase_region: us-central1
 
 stack:
@@ -71,7 +71,7 @@ live_tests:
     FIRESTORE_EMULATOR_HOST: "127.0.0.1:8080"
     FIREBASE_AUTH_EMULATOR_HOST: "127.0.0.1:9099"
     STORAGE_EMULATOR_HOST: "127.0.0.1:9199"
-    FB_PROJECT_ID: fire-factory
+    FB_PROJECT_ID: fire-factory-si
 
 config:
   env_example: ".env.example"

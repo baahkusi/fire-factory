@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Standalone automated setup script for GitHub Actions and Firebase App Hosting.
-# Generated for Firebase Project: fire-factory (Region: us-central1)
+# Generated for Firebase Project: fire-factory-si (Region: us-central1)
 set -euo pipefail
 
-PROJECT_ID="fire-factory"
+PROJECT_ID="fire-factory-si"
 REGION="us-central1"
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$DIR"

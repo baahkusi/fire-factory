@@ -22,7 +22,7 @@ describe.skipIf(!emulatorHost)("Firestore emulator", () => {
     const {getFirestore} = await import("firebase-admin/firestore");
     const {deleteApp, getApps, initializeApp} = adminApp;
 
-    const projectId = process.env.FB_PROJECT_ID ?? "fire-factory";
+    const projectId = process.env.FB_PROJECT_ID ?? "fire-factory-si";
     const app = getApps()[0] ?? initializeApp({projectId});
     dispose = async () => {
       await deleteApp(app);
@@ -49,7 +49,7 @@ describe.skipIf(!emulatorHost)("Firestore rules", () => {
   it("lets a user read their profile and denies client writes", async () => {
     const [host, portRaw] = (emulatorHost ?? "127.0.0.1:8080").split(":");
     testEnv = await initializeTestEnvironment({
-      projectId: "fire-factory-rules",
+      projectId: "fire-factory-si-rules",
       firestore: {
         rules: readFileSync(resolve(__dirname, "../../firestore.rules"), "utf8"),
         host,

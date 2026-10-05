@@ -3,8 +3,8 @@ import type {ReactNode} from "react";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Fire Factory",
-  description: "Fire Factory on Firebase.",
+  title: "Fire Factory Si",
+  description: "Fire Factory Si on Firebase.",
 };
 
 export default function RootLayout({children}: {children: ReactNode}) {

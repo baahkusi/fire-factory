@@ -3,7 +3,7 @@ import Link from "next/link";
 export default function HomePage() {
   return (
     <>
-      <p className="meta">fire-factory</p>
+      <p className="meta">fire-factory-si</p>
       <h1>A Firebase base for the next product.</h1>
       <p className="lede">
         Identity, a privileged staff grant, Firestore closed to client writes,
