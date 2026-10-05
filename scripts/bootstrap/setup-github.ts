@@ -12,13 +12,17 @@ import * as path from "node:path";
 import { execSync, spawnSync } from "node:child_process";
 import { ask, confirm } from "../utils/prompt";
 import {
+  configureRepository,
   getCurrentProjectId,
   getCurrentRegion,
   toTitleCase,
-  updateEnvironmentYaml,
-  updateFirebaseJson,
-  updateFirebaserc,
 } from "./set-project";
+import {
+  publishGithubDeployerSecret,
+  provisionFirebaseProject,
+  readWebConfig,
+  type FirebaseWebConfig,
+} from "./provision-firebase";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 
@@ -209,78 +213,6 @@ function getGitRemote(): string | null {
   }
 }
 
-function parseGitHubRepo(remoteUrl: string): { owner: string; repo: string } | null {
-  const sshMatch = remoteUrl.match(/github\.com[:/]([^/]+)\/([^/.]+)(?:\.git)?$/);
-  if (sshMatch) {
-    return { owner: sshMatch[1], repo: sshMatch[2] };
-  }
-  return null;
-}
-
-function getMissingGcpApis(projectId: string, requiredApis: string[]): string[] {
-  try {
-    const output = execSync(
-      `gcloud services list --enabled --project="${projectId}" --format="value(config.name)"`,
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
-    );
-    const enabled = new Set(output.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
-    return requiredApis.filter((api) => !enabled.has(api));
-  } catch {
-    return requiredApis;
-  }
-}
-
-function serviceAccountExists(projectId: string, name: string): boolean {
-  try {
-    execSync(
-      `gcloud iam service-accounts describe "${name}@${projectId}.iam.gserviceaccount.com" --project="${projectId}"`,
-      { stdio: "ignore" }
-    );
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function getMissingIamRoles(projectId: string, saEmail: string, roles: string[]): string[] {
-  try {
-    const output = execSync(
-      `gcloud projects get-iam-policy "${projectId}" --flatten="bindings[].members" --filter="bindings.members:serviceAccount:${saEmail}" --format="value(bindings.role)"`,
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
-    );
-    const granted = new Set(output.split(/\r?\n/).map((s) => s.trim()).filter(Boolean));
-    return roles.filter((role) => !granted.has(role));
-  } catch {
-    return roles;
-  }
-}
-
-function hasGithubSecret(secretName: string): boolean {
-  if (!commandExists("gh")) return false;
-  try {
-    const list = execSync("gh secret list", {
-      cwd: REPO_ROOT,
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-    return list.includes(secretName);
-  } catch {
-    return false;
-  }
-}
-
-function hasUserManagedKey(projectId: string, saEmail: string): boolean {
-  try {
-    const keys = execSync(
-      `gcloud iam service-accounts keys list --iam-account="${saEmail}" --project="${projectId}" --filter="keyType:USER_MANAGED" --format="value(name)"`,
-      { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }
-    ).trim();
-    return keys.length > 0;
-  } catch {
-    return false;
-  }
-}
-
 function isGitBranchPushed(): boolean {
   try {
     execSync("git fetch origin main", { cwd: REPO_ROOT, stdio: "ignore" });
@@ -433,8 +365,29 @@ jobs:
 
 export function generateAppHostingYaml(
   projectId: string,
-  region: string
+  region: string,
+  web?: FirebaseWebConfig | null
 ): string {
+  const authDomain = web?.authDomain || `${projectId}.firebaseapp.com`;
+  const bucket = web?.storageBucket || `${projectId}.firebasestorage.app`;
+  const webKeys = web ?
+    `  - variable: NEXT_PUBLIC_FIREBASE_API_KEY
+    value: "${web.apiKey}"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_MESSAGING_SENDER_ID
+    value: "${web.messagingSenderId}"
+    availability:
+      - BUILD
+      - RUNTIME
+  - variable: NEXT_PUBLIC_FIREBASE_APP_ID
+    value: "${web.appId}"
+    availability:
+      - BUILD
+      - RUNTIME
+` :
+    "";
   return `# Firebase App Hosting configuration for frontend
 # Documentation: https://firebase.google.com/docs/app-hosting/configure
 
@@ -453,16 +406,16 @@ env:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN
-    value: "${projectId}.firebaseapp.com"
+    value: "${authDomain}"
     availability:
       - BUILD
       - RUNTIME
   - variable: NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET
-    value: "${projectId}.firebasestorage.app"
+    value: "${bucket}"
     availability:
       - BUILD
       - RUNTIME
-  - variable: NEXT_PUBLIC_API_BASE_URL
+${webKeys}  - variable: NEXT_PUBLIC_API_BASE_URL
     value: "https://${region}-${projectId}.cloudfunctions.net/api"
     availability:
       - BUILD
@@ -472,15 +425,18 @@ env:
 
 export function generateSetupDeploymentsScript(
   projectId: string,
-  region: string
+  region: string,
+  appId = ""
 ): string {
+  const appArg = appId ? ` --app "$WEB_APP_ID"` : "";
   return `#!/usr/bin/env bash
-# Standalone automated setup script for GitHub Actions and Firebase App Hosting.
+# Re-run provisioning, the GitHub deployer secret, and App Hosting.
 # Generated for Firebase Project: ${projectId} (Region: ${region})
 set -euo pipefail
 
 PROJECT_ID="${projectId}"
 REGION="${region}"
+WEB_APP_ID="${appId}"
 DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$DIR"
 
@@ -488,192 +444,38 @@ echo "=========================================================="
 echo "  Deployments Setup: $PROJECT_ID ($REGION)"
 echo "=========================================================="
 
-# 1. Commit and push repository
+echo "→ Provisioning Firebase (Firestore, Storage, Auth, Web app, deployer)..."
+npm run provision -- --project="$PROJECT_ID" --region="$REGION" --yes
+
 if [[ -n "$(git status --porcelain)" ]]; then
   echo "→ Committing working tree..."
   git add .
-  git commit -m "Configure deployments for $PROJECT_ID"
+  git commit -m "Configure deployments for $PROJECT_ID" || echo "Notice: commit skipped."
 else
   echo "✔ Git working tree is clean."
 fi
 
 if git remote get-url origin >/dev/null 2>&1; then
-  git fetch origin main >/dev/null 2>&1 || true
-  LOCAL_REV="$(git rev-parse HEAD 2>/dev/null || true)"
-  REMOTE_REV="$(git rev-parse origin/main 2>/dev/null || true)"
-  if [[ -n "$LOCAL_REV" ]] && [[ "$LOCAL_REV" == "$REMOTE_REV" ]]; then
-    echo "✔ Branch 'main' is already up to date with origin/main, skipping push."
-  else
-    echo "→ Pushing to main..."
-    git push -u origin main || echo "Notice: Push skipped or branch up to date."
-  fi
+  echo "→ Pushing to main..."
+  git push -u origin main || echo "Notice: push skipped."
 else
   echo "→ No git remote origin detected. Add with: git remote add origin <url>"
 fi
 
-# 2. Google Cloud Service Account
-if ! command -v gcloud >/dev/null 2>&1; then
-  echo "⚠️  Google Cloud SDK ('gcloud') not found in PATH."
-  if [[ "$(uname)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
-    read -p "Install gcloud now via Homebrew ('brew install --cask google-cloud-sdk')? [Y/n] " -n 1 -r
-    echo
-    if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-      brew install --cask google-cloud-sdk
-    fi
-  else
-    echo "Install gcloud manually: curl -sSL https://sdk.cloud.google.com | bash"
-  fi
-fi
+echo "→ Publishing the GitHub deployer secret..."
+npm run provision -- --project="$PROJECT_ID" --region="$REGION" --yes --secret-only
 
-if command -v gcloud >/dev/null 2>&1; then
-  if ! gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then
-    echo "⚠️  Google Cloud access denied or project not found for '$PROJECT_ID'."
-    echo "   Verify authenticated account: gcloud config get-value account"
-    echo "   Switch account if needed:    gcloud auth login"
-  else
-    echo "→ Checking Google Cloud APIs..."
-    REQUIRED_APIS=(
-      cloudfunctions.googleapis.com
-      firebaseapphosting.googleapis.com
-      developerconnect.googleapis.com
-      run.googleapis.com
-      cloudbuild.googleapis.com
-      artifactregistry.googleapis.com
-    )
-    ENABLED_APIS="$(gcloud services list --enabled --project="$PROJECT_ID" --format="value(config.name)" 2>/dev/null || true)"
-    MISSING_APIS=()
-    for api in "\${REQUIRED_APIS[@]}"; do
-      if ! echo "$ENABLED_APIS" | grep -qx "$api"; then
-        MISSING_APIS+=("$api")
-      fi
-    done
-    if [[ \${#MISSING_APIS[@]} -eq 0 ]]; then
-      echo "✔ Required Google Cloud APIs already enabled, skipping."
-    else
-      echo "→ Enabling missing Google Cloud APIs: \${MISSING_APIS[*]}..."
-      gcloud services enable "\${MISSING_APIS[@]}" --project="$PROJECT_ID" || true
-    fi
-
-    SA_EMAIL="github-deployer@$PROJECT_ID.iam.gserviceaccount.com"
-    if gcloud iam service-accounts describe "$SA_EMAIL" --project="$PROJECT_ID" >/dev/null 2>&1; then
-      echo "✔ Service account 'github-deployer' already exists, skipping creation."
-    else
-      echo "→ Creating Google Cloud Service Account (github-deployer)..."
-      gcloud iam service-accounts create github-deployer \\
-        --project="$PROJECT_ID" \\
-        --description="Deploys Firebase Functions and Rules" || true
-    fi
-
-    ROLES=(
-      roles/cloudfunctions.admin
-      roles/iam.serviceAccountUser
-      roles/firebaserules.admin
-      roles/datastore.user
-      roles/storage.admin
-    )
-
-    ASSIGNED_ROLES="$(gcloud projects get-iam-policy "$PROJECT_ID" \\
-      --flatten="bindings[].members" \\
-      --filter="bindings.members:serviceAccount:$SA_EMAIL" \\
-      --format="value(bindings.role)" 2>/dev/null || true)"
-
-    for r in "\${ROLES[@]}"; do
-      if echo "$ASSIGNED_ROLES" | grep -qx "$r"; then
-        echo "✔ Role $r already granted to github-deployer, skipping."
-      else
-        echo "  • Granting $r..."
-        gcloud projects add-iam-policy-binding "$PROJECT_ID" \\
-          --member="serviceAccount:$SA_EMAIL" \\
-          --role="$r" >/dev/null || true
-      fi
-    done
-
-    SECRET_SET=false
-    if command -v gh >/dev/null 2>&1; then
-      if gh secret list 2>/dev/null | grep -q "FIREBASE_SERVICE_ACCOUNT"; then
-        SECRET_SET=true
-      fi
-    fi
-
-    if [[ "$SECRET_SET" == "true" ]]; then
-      echo "✔ GitHub Secret FIREBASE_SERVICE_ACCOUNT already configured, skipping key generation."
-    else
-      echo "→ Generating deployer service account key..."
-      KEY_FILE="./github-key.json"
-      if gcloud iam service-accounts keys create "$KEY_FILE" \\
-        --iam-account="$SA_EMAIL" \\
-        --project="$PROJECT_ID"; then
-        if command -v gh >/dev/null 2>&1; then
-          echo "→ Setting FIREBASE_SERVICE_ACCOUNT in GitHub Secrets via gh CLI..."
-          gh secret set FIREBASE_SERVICE_ACCOUNT < "$KEY_FILE"
-          rm -f "$KEY_FILE"
-          echo "✔ GitHub Secret FIREBASE_SERVICE_ACCOUNT configured successfully!"
-        elif [[ "$(uname)" == "Darwin" ]] && command -v pbcopy >/dev/null 2>&1; then
-          pbcopy < "$KEY_FILE"
-          rm -f "$KEY_FILE"
-          echo "✔ Service account key copied to macOS clipboard (via pbcopy)!"
-          echo "  Paste as secret 'FIREBASE_SERVICE_ACCOUNT' at: GitHub Settings -> Secrets -> Actions"
-        else
-          echo "✔ Service account key generated at: $KEY_FILE"
-          echo "  Add as secret 'FIREBASE_SERVICE_ACCOUNT' in GitHub Settings, then securely delete $KEY_FILE."
-        fi
-      else
-        echo "Notice: Could not generate key. You can generate one in Google Cloud Console IAM."
-      fi
-    fi
-  fi
-else
-  echo "Notice: gcloud CLI not installed. Run this script again after installing gcloud."
-fi
-
-# 3. Firebase App Hosting
 FIREBASE_BIN="firebase"
 if ! command -v firebase >/dev/null 2>&1; then
   if npx --no-install firebase --version >/dev/null 2>&1; then
     FIREBASE_BIN="npx firebase"
-  else
-    echo "⚠️  Firebase CLI not found in PATH."
-    if [[ "$(uname)" == "Darwin" ]] && command -v brew >/dev/null 2>&1; then
-      read -p "Install firebase-cli via Homebrew ('brew install firebase-cli')? [Y/n] " -n 1 -r
-      echo
-      if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-        brew install firebase-cli
-        if command -v firebase >/dev/null 2>&1; then
-          FIREBASE_BIN="firebase"
-        fi
-      fi
-    fi
-    if ! command -v firebase >/dev/null 2>&1; then
-      read -p "Install firebase-tools globally ('npm install -g firebase-tools')? [Y/n] " -n 1 -r
-      echo
-      if [[ $REPLY =~ ^[Yy]$ ]] || [[ -z $REPLY ]]; then
-        npm install -g firebase-tools
-        if command -v firebase >/dev/null 2>&1; then
-          FIREBASE_BIN="firebase"
-        fi
-      fi
-    fi
   fi
 fi
 
 if command -v firebase >/dev/null 2>&1 || [[ "$FIREBASE_BIN" == "npx firebase" ]]; then
-  BACKEND_LIST=""
-  if [[ "$FIREBASE_BIN" == "npx firebase" ]]; then
-    BACKEND_LIST="$(npx firebase apphosting:backends:list --project="$PROJECT_ID" 2>/dev/null || true)"
-  else
-    BACKEND_LIST="$($FIREBASE_BIN apphosting:backends:list --project="$PROJECT_ID" 2>/dev/null || true)"
-  fi
-
-  if echo "$BACKEND_LIST" | grep -q "web"; then
-    echo "✔ Firebase App Hosting backend 'web' already exists, skipping creation."
-  else
-    echo "→ Creating Firebase App Hosting backend 'web'..."
-    $FIREBASE_BIN apphosting:backends:create \\
-      --project="$PROJECT_ID" \\
-      --backend=web \\
-      --primary-region="$REGION" \\
-      --root-dir=frontend || echo "Notice: App Hosting creation did not complete. Check Blaze plan and Developer Connect link."
-  fi
+  echo "→ Creating App Hosting backend 'web'."
+  echo "  The first run opens a browser so you can authorize the GitHub repository."
+  $FIREBASE_BIN apphosting:backends:create --project="$PROJECT_ID" --backend=web --primary-region="$REGION" --root-dir=frontend${appArg} || echo "Notice: App Hosting creation did not complete. Re-run after firebase login."
 else
   echo "Notice: firebase CLI not available. Install with: npm install -g firebase-tools"
 fi
@@ -687,452 +489,219 @@ async function main() {
   const isAutoYes = flag("yes");
   const explicitProject = (arg("project") ?? arg("id") ?? "").trim().toLowerCase();
   const explicitRegion = (arg("region") ?? "").trim().toLowerCase();
+  const explicitName = (arg("name") ?? "").trim();
   const explicitRemote = (arg("remote") ?? "").trim();
+  const interactive = !isAutoYes && Boolean(process.stdin.isTTY);
 
   let projectId = explicitProject || getCurrentProjectId(REPO_ROOT);
   let region = explicitRegion || getCurrentRegion(REPO_ROOT);
-
-  if (projectId === "fire-factory" && !explicitProject && !isAutoYes && process.stdin.isTTY) {
+  const templateIds = new Set(["fire-factory", "fire-factory-si"]);
+  if (!explicitProject && !isAutoYes && interactive && templateIds.has(projectId)) {
     // eslint-disable-next-line no-console
-    console.log("\nNotice: The project ID is currently the template default 'fire-factory'.");
+    console.log(`\nNotice: The project ID is currently the template default '${projectId}'.`);
     projectId = (await ask("Firebase project ID")).trim().toLowerCase();
-    region = (await ask("Data center region", { default: region })).trim().toLowerCase();
-    const projectName = toTitleCase(projectId);
-    updateFirebaserc(REPO_ROOT, projectId);
-    updateFirebaseJson(REPO_ROOT, region);
-    updateEnvironmentYaml(REPO_ROOT, projectId, projectName, region);
+    const regionAnswer = (await ask("Data center region", {default: region})).trim().toLowerCase();
+    region = regionAnswer || region;
   }
 
+  const projectName = explicitName || toTitleCase(projectId);
   // eslint-disable-next-line no-console
   console.log("\nSetting up GitHub Actions & Firebase Deployments\n");
   // eslint-disable-next-line no-console
-  console.log(`Target Project: ${projectId}`);
+  console.log(`Target Project: ${projectName} (${projectId})`);
   // eslint-disable-next-line no-console
   console.log(`Target Region:  ${region}\n`);
 
-  const workflowsDir = path.join(REPO_ROOT, ".github/workflows");
-  if (!fs.existsSync(workflowsDir)) {
-    fs.mkdirSync(workflowsDir, { recursive: true });
-  }
-
-  const filesWritten: string[] = [];
-
-  // 1. CI Workflow
-  const ciPath = path.join(workflowsDir, "ci.yaml");
-  fs.writeFileSync(ciPath, generateCiWorkflow(), "utf8");
-  filesWritten.push(".github/workflows/ci.yaml");
-
-  // 2. Deploy Workflow (Functions & Rules)
-  const deployPath = path.join(workflowsDir, "deploy.yaml");
-  fs.writeFileSync(deployPath, generateDeployWorkflow(projectId), "utf8");
-  filesWritten.push(".github/workflows/deploy.yaml");
-
-  // 3. App Hosting Config
-  const appHostingPath = path.join(REPO_ROOT, "frontend/apphosting.yaml");
-  fs.writeFileSync(appHostingPath, generateAppHostingYaml(projectId, region), "utf8");
-  filesWritten.push("frontend/apphosting.yaml");
-
-  // 4. Standalone Deployment Setup Shell Script
-  const scriptPath = path.join(REPO_ROOT, "scripts/bootstrap/setup-deployments.sh");
-  fs.writeFileSync(scriptPath, generateSetupDeploymentsScript(projectId, region), "utf8");
-  fs.chmodSync(scriptPath, 0o755);
-  filesWritten.push("scripts/bootstrap/setup-deployments.sh (executable)");
-
-  // eslint-disable-next-line no-console
-  console.log("Generated Deployment & CI Files:");
-  for (const file of filesWritten) {
+  const stamped = configureRepository(REPO_ROOT, {projectId, projectName, region});
+  if (stamped.length > 0) {
     // eslint-disable-next-line no-console
-    console.log(`  ✔ ${file}`);
+    console.log("Stamped project id into repository files:");
+    for (const file of stamped) {
+      // eslint-disable-next-line no-console
+      console.log(`  ✔ ${file}`);
+    }
   }
 
-  // Determine git remote
-  let remote = explicitRemote || getGitRemote();
-
-  // Execution flow: offer to run the automated steps directly
   let shouldExecute = isAutoYes || flag("run");
   if (flag("generate-only") || flag("no-run")) {
     shouldExecute = false;
   } else if (!isAutoYes && !flag("run")) {
     shouldExecute = await confirm(
-      "\nWould you like to execute the automated setup steps now (Git, gcloud, App Hosting)?",
+      "\nProvision this Firebase project and connect GitHub deploy now?",
       true
     );
   }
 
+  let web: FirebaseWebConfig | null = null;
   if (shouldExecute) {
-    // eslint-disable-next-line no-console
-    console.log("\n--- Step 1: Git Repository & Push ---");
-
-    // Commit changes if dirty
-    try {
-      const status = execSync("git status --porcelain", {
-        cwd: REPO_ROOT,
-        encoding: "utf8",
-      }).trim();
-      if (status) {
-        // eslint-disable-next-line no-console
-        console.log("Committing changes to git...");
-        execSync("git add .", { cwd: REPO_ROOT });
-        execSync(`git commit -m "Configure deployments for ${projectId}"`, {
-          cwd: REPO_ROOT,
-        });
-        // eslint-disable-next-line no-console
-        console.log("✔ Changes committed.");
-      } else {
-        // eslint-disable-next-line no-console
-        console.log("✔ Git working tree is clean.");
-      }
-    } catch (e) {
-      // eslint-disable-next-line no-console
-      console.warn("Notice: Git commit could not be completed automatically (run manually if needed):", e instanceof Error ? e.message : e);
-    }
-
-    if (!remote && !isAutoYes) {
-      const enteredRemote = await ask(
-        "Enter your GitHub repository remote URL (or press Enter to skip)",
-        { required: false }
-      );
-      if (enteredRemote) {
-        remote = enteredRemote.trim();
-        try {
-          execSync(`git remote add origin ${remote}`, { cwd: REPO_ROOT });
-          // eslint-disable-next-line no-console
-          console.log(`✔ Remote origin added: ${remote}`);
-        } catch {
-          // ignore if already added
-        }
-      }
-    }
-
-    if (remote) {
-      if (isGitBranchPushed()) {
-        // eslint-disable-next-line no-console
-        console.log("✔ Branch 'main' is already up to date with remote origin, skipping push.");
-      } else {
-        try {
-          // eslint-disable-next-line no-console
-          console.log("Pushing to GitHub remote main...");
-          execSync("git push -u origin main", { cwd: REPO_ROOT, stdio: "inherit" });
-          // eslint-disable-next-line no-console
-          console.log("✔ Pushed to GitHub main.");
-        } catch {
-          // eslint-disable-next-line no-console
-          console.warn("Notice: Push did not complete. You can run 'git push -u origin main' manually.");
-        }
-      }
-    }
-
-    // --- Step 2: Google Cloud Service Account ---
-    // eslint-disable-next-line no-console
-    console.log("\n--- Step 2: Google Cloud Service Account (GitHub Actions Deployer) ---");
-    const hasGcloud = await ensureGcloudCli(isAutoYes);
-    if (hasGcloud) {
-      let runGcloud = isAutoYes;
-      if (!runGcloud) {
-        runGcloud = await confirm(
-          `Create GitHub deployer service account and assign IAM roles in Google Cloud project (${projectId})?`,
-          true
-        );
-      }
-      if (runGcloud) {
-        // Pre-check access to the project
-        let activeAccount = "";
-        try {
-          activeAccount = execSync("gcloud config get-value account", {
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "ignore"],
-          }).trim();
-        } catch {
-          // ignore
-        }
-
-        let hasProjectAccess = false;
-        try {
-          execSync(`gcloud projects describe "${projectId}"`, {
-            stdio: ["ignore", "pipe", "ignore"],
-          });
-          hasProjectAccess = true;
-        } catch {
-          // eslint-disable-next-line no-console
-          console.warn(`\n⚠️  Google Cloud access denied or project not found for "${projectId}".`);
-          if (activeAccount) {
-            // eslint-disable-next-line no-console
-            console.warn(`   Authenticated in gcloud as: ${activeAccount}`);
-          }
-          // eslint-disable-next-line no-console
-          console.log("\n   Possible causes:");
-          // eslint-disable-next-line no-console
-          console.log(`   1. Account mismatch: Was ${projectId} created under a different Google account?`);
-          // eslint-disable-next-line no-console
-          console.log("      Run 'gcloud auth list' to see accounts, or 'gcloud auth login' to switch.");
-          // eslint-disable-next-line no-console
-          console.log(`   2. Missing IAM role: Grant ${activeAccount || "your email"} 'Owner' or 'Editor' in Google Cloud Console:`);
-          // eslint-disable-next-line no-console
-          console.log(`      https://console.cloud.google.com/iam-admin/iam?project=${projectId}`);
-          // eslint-disable-next-line no-console
-          console.log("   3. Project ID mismatch: Check Firebase Console -> Project Settings -> General -> Project ID.\n");
-
-          if (process.stdin.isTTY && !isAutoYes) {
-            const reauth = await confirm(
-              "Would you like to log in to the account that owns this Firebase project now ('gcloud auth login')?",
-              true
-            );
-            if (reauth) {
-              spawnSync("gcloud", ["auth", "login"], { stdio: "inherit" });
-              try {
-                execSync(`gcloud projects describe "${projectId}"`, {
-                  stdio: ["ignore", "pipe", "ignore"],
-                });
-                hasProjectAccess = true;
-                // eslint-disable-next-line no-console
-                console.log(`✔ Access verified for project ${projectId}!`);
-              } catch {
-                // eslint-disable-next-line no-console
-                console.warn(`Could not verify access to ${projectId}. Skipping service account creation.`);
-              }
-            }
-          }
-        }
-
-        if (hasProjectAccess) {
-          const requiredApis = [
-            "cloudfunctions.googleapis.com",
-            "firebaseapphosting.googleapis.com",
-            "developerconnect.googleapis.com",
-            "run.googleapis.com",
-            "cloudbuild.googleapis.com",
-            "artifactregistry.googleapis.com",
-          ];
-          const missingApis = getMissingGcpApis(projectId, requiredApis);
-          if (missingApis.length === 0) {
-            // eslint-disable-next-line no-console
-            console.log("✔ Required Google Cloud APIs already enabled, skipping.");
-          } else {
-            // eslint-disable-next-line no-console
-            console.log(`Enabling missing Google Cloud APIs: ${missingApis.join(", ")}...`);
-            try {
-              execSync(
-                `gcloud services enable ${missingApis.join(" ")} --project="${projectId}"`,
-                { stdio: "inherit" }
-              );
-              // eslint-disable-next-line no-console
-              console.log("✔ Required Google Cloud APIs enabled!");
-            } catch (e) {
-              // eslint-disable-next-line no-console
-              console.warn("Notice: Could not enable all APIs automatically (Blaze plan may be required):", e instanceof Error ? e.message : e);
-            }
-          }
-
-          let serviceAccountReady = false;
-          if (serviceAccountExists(projectId, "github-deployer")) {
-            // eslint-disable-next-line no-console
-            console.log("✔ Service account 'github-deployer' already exists, skipping creation.");
-            serviceAccountReady = true;
-          } else {
-            try {
-              // eslint-disable-next-line no-console
-              console.log("Creating service account 'github-deployer'...");
-              execSync(
-                `gcloud iam service-accounts create github-deployer --project="${projectId}" --description="Deploys Firebase Functions and Rules"`,
-                { stdio: "inherit" }
-              );
-              serviceAccountReady = true;
-            } catch {
-              if (serviceAccountExists(projectId, "github-deployer")) {
-                // eslint-disable-next-line no-console
-                console.log("✔ Service account 'github-deployer' already exists, proceeding...");
-                serviceAccountReady = true;
-              } else {
-                // eslint-disable-next-line no-console
-                console.warn("\n❌ Service account 'github-deployer' could not be created or accessed.");
-                // eslint-disable-next-line no-console
-                console.warn("Skipping IAM bindings and key generation for now.");
-              }
-            }
-          }
-
-          if (serviceAccountReady) {
-            const saEmail = `github-deployer@${projectId}.iam.gserviceaccount.com`;
-            const roles = [
-              "roles/cloudfunctions.admin",
-              "roles/iam.serviceAccountUser",
-              "roles/firebaserules.admin",
-              "roles/datastore.user",
-              "roles/storage.admin",
-            ];
-            const missingRoles = getMissingIamRoles(projectId, saEmail, roles);
-            if (missingRoles.length === 0) {
-              // eslint-disable-next-line no-console
-              console.log("✔ All IAM roles already granted to github-deployer, skipping.");
-            } else {
-              for (const role of missingRoles) {
-                // eslint-disable-next-line no-console
-                console.log(`Granting ${role}...`);
-                try {
-                  execSync(
-                    `gcloud projects add-iam-policy-binding "${projectId}" --member="serviceAccount:${saEmail}" --role="${role}"`,
-                    { stdio: "ignore" }
-                  );
-                } catch (e) {
-                  // eslint-disable-next-line no-console
-                  console.warn(`Warning: Could not bind ${role}:`, e instanceof Error ? e.message : e);
-                }
-              }
-            }
-
-            const secretAlreadySet = hasGithubSecret("FIREBASE_SERVICE_ACCOUNT");
-            if (secretAlreadySet) {
-              // eslint-disable-next-line no-console
-              console.log("✔ GitHub secret FIREBASE_SERVICE_ACCOUNT already configured, skipping key generation.");
-            } else {
-              const keyPath = path.join(REPO_ROOT, "github-key.json");
-              try {
-                // eslint-disable-next-line no-console
-                console.log("Generating service account key...");
-                execSync(
-                  `gcloud iam service-accounts keys create "${keyPath}" --iam-account="${saEmail}" --project="${projectId}"`,
-                  { stdio: "inherit" }
-                );
-
-                const hasGh = commandExists("gh");
-                if (hasGh) {
-                  // eslint-disable-next-line no-console
-                  console.log("Setting FIREBASE_SERVICE_ACCOUNT in GitHub Repository Secrets via gh CLI...");
-                  execSync(`gh secret set FIREBASE_SERVICE_ACCOUNT < "${keyPath}"`, {
-                    cwd: REPO_ROOT,
-                    stdio: "inherit",
-                  });
-                  fs.unlinkSync(keyPath);
-                  // eslint-disable-next-line no-console
-                  console.log("✔ Secret FIREBASE_SERVICE_ACCOUNT set in GitHub!");
-                } else if (process.platform === "darwin" && commandExists("pbcopy")) {
-                  execSync(`pbcopy < "${keyPath}"`);
-                  fs.unlinkSync(keyPath);
-                  // eslint-disable-next-line no-console
-                  console.log("\n✔ Service account JSON key copied to your clipboard via pbcopy!");
-                  const ghDetails = remote ? parseGitHubRepo(remote) : null;
-                  const secretUrl = ghDetails
-                    ? `https://github.com/${ghDetails.owner}/${ghDetails.repo}/settings/secrets/actions/new`
-                    : "https://github.com/<owner>/<repo>/settings/secrets/actions/new";
-                  // eslint-disable-next-line no-console
-                  console.log(`  Go to: ${secretUrl}`);
-                  // eslint-disable-next-line no-console
-                  console.log("  Add Secret Name: FIREBASE_SERVICE_ACCOUNT");
-                  // eslint-disable-next-line no-console
-                  console.log("  Paste key: Cmd+V");
-                } else {
-                  // eslint-disable-next-line no-console
-                  console.log(`✔ Key saved to ${keyPath}. Add to GitHub Secrets as FIREBASE_SERVICE_ACCOUNT, then delete.`);
-                }
-              } catch (e) {
-                // eslint-disable-next-line no-console
-                console.warn("Notice: Key generation failed:", e instanceof Error ? e.message : e);
-                // eslint-disable-next-line no-console
-                console.log("You can generate the key manually in the Google Cloud Console under IAM -> Service Accounts.");
-              }
-            }
-          }
-        } else {
-          // eslint-disable-next-line no-console
-          console.log("\nSkipping service account setup for now. You can run './scripts/bootstrap/setup-deployments.sh' once access is granted.\n");
-        }
-      }
-    } else {
-      // eslint-disable-next-line no-console
-      console.log("Notice: gcloud CLI not ready. You can run './scripts/bootstrap/setup-deployments.sh' after installing.");
-    }
-
-    // --- Step 3: Firebase App Hosting Backend ---
-    // eslint-disable-next-line no-console
-    console.log("\n--- Step 3: Firebase App Hosting Backend ---");
-    const firebaseCmd = await ensureFirebaseCli(isAutoYes);
-    if (firebaseCmd) {
-      if (appHostingBackendExists(firebaseCmd, projectId, "web")) {
-        // eslint-disable-next-line no-console
-        console.log("✔ Firebase App Hosting backend 'web' already exists, skipping creation.");
-      } else {
-        let createAppHosting = isAutoYes;
-        if (!createAppHosting) {
-          createAppHosting = await confirm(
-            `Run '${firebaseCmd} apphosting:backends:create' for backend 'web' in region '${region}' now?`,
-            true
-          );
-        }
-        if (createAppHosting) {
-          // eslint-disable-next-line no-console
-          console.log(`Executing ${firebaseCmd} apphosting:backends:create...`);
-          const result = runFirebase(
-            firebaseCmd,
-            [
-              "apphosting:backends:create",
-              "--project",
-              projectId,
-              "--backend",
-              "web",
-              "--primary-region",
-              region,
-              "--root-dir",
-              "frontend",
-            ]
-          );
-
-          if (result.status !== 0) {
-            // eslint-disable-next-line no-console
-            console.warn("\n⚠️  Firebase App Hosting backend creation did not complete successfully.");
-            // eslint-disable-next-line no-console
-            console.log("Why this happens on fresh projects:");
-            // eslint-disable-next-line no-console
-            console.log("  1. Blaze Plan Required: App Hosting provisions Cloud Run services, which are blocked on the free Spark plan.");
-            // eslint-disable-next-line no-console
-            console.log(`     Upgrade in Firebase Console: https://console.firebase.google.com/project/${projectId}/overview`);
-            // eslint-disable-next-line no-console
-            console.log("  2. GitHub Repository Link: Google Cloud Developer Connect requires linking your GitHub repository.");
-            // eslint-disable-next-line no-console
-            console.log(`     Link in Firebase Console: https://console.firebase.google.com/project/${projectId}/apphosting`);
-            // eslint-disable-next-line no-console
-            console.log(`     Or re-run interactively in terminal: firebase apphosting:backends:create --project ${projectId}\n`);
-          } else {
-            // eslint-disable-next-line no-console
-            console.log("✔ Firebase App Hosting backend 'web' created successfully!");
-          }
-        }
-      }
-    } else {
-      // eslint-disable-next-line no-console
-      console.log("Notice: Firebase CLI not ready. You can configure App Hosting backend after installing.");
-    }
-
-    // --- Step 4: Base Deployment & Next Lifecycle Steps ---
-    // eslint-disable-next-line no-console
-    console.log("\n--- Step 4: Base Deployment & Lifecycle Progression ---");
-    // eslint-disable-next-line no-console
-    console.log("Your base skeleton is now ready for deployment!");
-    // eslint-disable-next-line no-console
-    console.log("  • Deploy base: push to 'main' (or run: npm run deploy:base)");
-    // eslint-disable-next-line no-console
-    console.log(`  • Verify live posture: npm run production-posture -- --api=https://${region}-${projectId}.cloudfunctions.net/api`);
-    // eslint-disable-next-line no-console
-    console.log("\nRemaining product lifecycle:");
-    // eslint-disable-next-line no-console
-    console.log("  1. Define specs: Write your product requirements in agent/SPEC.md §1.4");
-    // eslint-disable-next-line no-console
-    console.log("  2. Remaining steps generate: Ask agent to append rows to agent/PLAN.md and create agent/implementation/ notes");
-    // eslint-disable-next-line no-console
-    console.log("  3. Finish work & deploy: Build step-by-step, approve, and push to deploy");
-    // eslint-disable-next-line no-console
-    console.log("  4. Enter maintenance: Declare Maintenance phase and record subsequent changes in agent/maintenance/");
-    // eslint-disable-next-line no-console
-    console.log("  5. Keep updating: Discrete maintenance requests per change\n");
+    await ensureGcloudCli(isAutoYes);
+    web = await provisionFirebaseProject({
+      projectId,
+      projectName,
+      region,
+      repoRoot: REPO_ROOT,
+      interactive,
+    });
   } else {
-    // If user chose not to run steps now, show them the standalone script location
+    const localPath = path.join(REPO_ROOT, "frontend/.env.local");
+    if (fs.existsSync(localPath)) {
+      web = readWebConfig(fs.readFileSync(localPath, "utf8"));
+    }
+  }
+
+  const workflowsDir = path.join(REPO_ROOT, ".github/workflows");
+  fs.mkdirSync(workflowsDir, {recursive: true});
+  const filesWritten: string[] = [];
+  const ciPath = path.join(workflowsDir, "ci.yaml");
+  fs.writeFileSync(ciPath, generateCiWorkflow(), "utf8");
+  filesWritten.push(".github/workflows/ci.yaml");
+  const deployPath = path.join(workflowsDir, "deploy.yaml");
+  fs.writeFileSync(deployPath, generateDeployWorkflow(projectId), "utf8");
+  filesWritten.push(".github/workflows/deploy.yaml");
+  const appHostingPath = path.join(REPO_ROOT, "frontend/apphosting.yaml");
+  fs.writeFileSync(appHostingPath, generateAppHostingYaml(projectId, region, web), "utf8");
+  filesWritten.push("frontend/apphosting.yaml");
+  const scriptPath = path.join(REPO_ROOT, "scripts/bootstrap/setup-deployments.sh");
+  fs.writeFileSync(
+    scriptPath,
+    generateSetupDeploymentsScript(projectId, region, web?.appId ?? ""),
+    "utf8"
+  );
+  fs.chmodSync(scriptPath, 0o755);
+  filesWritten.push("scripts/bootstrap/setup-deployments.sh (executable)");
+
+  // eslint-disable-next-line no-console
+  console.log("\nGenerated deployment files:");
+  for (const file of filesWritten) {
     // eslint-disable-next-line no-console
-    console.log("\nTo run the full deployment setup at any time without copy-pasting, execute:");
+    console.log(`  ✔ ${file}`);
+  }
+
+  if (!shouldExecute) {
     // eslint-disable-next-line no-console
-    console.log("  ./scripts/bootstrap/setup-deployments.sh\n");
+    console.log("\nRe-run with ./scripts/bootstrap/setup-deployments.sh when you want cloud provisioning.\n");
+    return;
+  }
+
+  let remote = explicitRemote || getGitRemote();
+  // eslint-disable-next-line no-console
+  console.log("\n--- Git repository ---");
+  try {
+    const status = execSync("git status --porcelain", {cwd: REPO_ROOT, encoding: "utf8"}).trim();
+    if (status) {
+      execSync("git add .", {cwd: REPO_ROOT});
+      execSync(`git commit -m "Configure deployments for ${projectId}"`, {cwd: REPO_ROOT});
+      // eslint-disable-next-line no-console
+      console.log("✔ Changes committed.");
+    } else {
+      // eslint-disable-next-line no-console
+      console.log("✔ Git working tree is clean.");
+    }
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "Notice: Git commit did not complete:",
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  if (!remote && interactive) {
+    const enteredRemote = await ask(
+      "Enter your GitHub repository remote URL (or press Enter to skip)",
+      {required: false}
+    );
+    if (enteredRemote) {
+      remote = enteredRemote.trim();
+      try {
+        execSync(`git remote add origin ${remote}`, {cwd: REPO_ROOT});
+        // eslint-disable-next-line no-console
+        console.log(`✔ Remote origin added: ${remote}`);
+      } catch {
+        // origin already exists
+      }
+    }
+  }
+
+  if (remote) {
+    if (isGitBranchPushed()) {
+      // eslint-disable-next-line no-console
+      console.log("✔ Branch main is already up to date with origin.");
+    } else {
+      try {
+        execSync("git push -u origin main", {cwd: REPO_ROOT, stdio: "inherit"});
+        // eslint-disable-next-line no-console
+        console.log("✔ Pushed to GitHub main.");
+      } catch {
+        // eslint-disable-next-line no-console
+        console.warn("Notice: Push did not complete. Run 'git push -u origin main'.");
+      }
+    }
   }
 
   // eslint-disable-next-line no-console
-  console.log("Setup completed successfully!\n");
+  console.log("\n--- GitHub deployer secret ---");
+  try {
+    await publishGithubDeployerSecret({projectId, repoRoot: REPO_ROOT, interactive});
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.warn(
+      "Notice: GitHub secret was not set:",
+      error instanceof Error ? error.message : error
+    );
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("\n--- Firebase App Hosting ---");
+  const firebaseCmd = await ensureFirebaseCli(isAutoYes);
+  if (!firebaseCmd) {
+    // eslint-disable-next-line no-console
+    console.log("Install the Firebase CLI, then re-run ./scripts/bootstrap/setup-deployments.sh");
+  } else if (appHostingBackendExists(firebaseCmd, projectId, "web")) {
+    // eslint-disable-next-line no-console
+    console.log("✔ Firebase App Hosting backend 'web' already exists.");
+  } else {
+    const loggedIn = runFirebase(firebaseCmd, ["projects:list"]);
+    if (loggedIn.status !== 0 && interactive) {
+      // eslint-disable-next-line no-console
+      console.log("\nFirebase CLI is not logged in. Starting 'firebase login'...\n");
+      runFirebase(firebaseCmd, ["login"]);
+    }
+    const createArgs = [
+      "apphosting:backends:create",
+      "--project",
+      projectId,
+      "--backend",
+      "web",
+      "--primary-region",
+      region,
+      "--root-dir",
+      "frontend",
+    ];
+    if (web?.appId) createArgs.push("--app", web.appId);
+    // eslint-disable-next-line no-console
+    console.log("The first App Hosting create opens a browser to authorize GitHub.");
+    const result = runFirebase(firebaseCmd, createArgs);
+    if (result.status !== 0) {
+      // eslint-disable-next-line no-console
+      console.warn("\nApp Hosting backend was not created.");
+      // eslint-disable-next-line no-console
+      console.log("Finish the GitHub authorization, then re-run:");
+      // eslint-disable-next-line no-console
+      console.log(`  firebase apphosting:backends:create --project ${projectId} --backend web --primary-region ${region} --root-dir frontend`);
+    } else {
+      // eslint-disable-next-line no-console
+      console.log("✔ Firebase App Hosting backend 'web' created.");
+    }
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("\nCloud project is provisioned.");
+  // eslint-disable-next-line no-console
+  console.log(`  Verify after deploy: npm run production-posture -- --api=https://${region}-${projectId}.cloudfunctions.net/api`);
+  // eslint-disable-next-line no-console
+  console.log("  First admin: npm run create-admin -- --email=you@example.com");
+  // eslint-disable-next-line no-console
+  console.log("  Product spec: agent/SPEC.md §1.4\n");
 }
 
 if (require.main === module) {

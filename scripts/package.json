@@ -8,6 +8,8 @@
     "production-posture": "ts-node verify/production-posture.ts",
     "set-project": "ts-node bootstrap/set-project.ts",
     "setup-github": "ts-node bootstrap/setup-github.ts",
+    "provision": "ts-node bootstrap/provision-firebase.ts",
+    "test": "node --require ts-node/register/transpile-only --test bootstrap/provision-firebase.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

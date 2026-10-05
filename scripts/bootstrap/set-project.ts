@@ -15,11 +15,16 @@
  *   npm run set-project -- --project=your-firebase-project-id
  *   npm run set-project -- --project=your-firebase-project-id --name="Your Project Name" --region=us-central1
  *   npm run set-project -- --project=your-firebase-project-id --force
+ *   npm run set-project -- --project=your-firebase-project-id --files-only
+ *
+ * Without --files-only, the command also provisions the existing Blaze project:
+ * Web app, email/password Auth, Firestore, Storage, and deployer IAM.
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { ask, confirm } from "../utils/prompt";
+import { provisionFirebaseProject } from "./provision-firebase";
 
 const REPO_ROOT = path.resolve(__dirname, "../..");
 const DEFAULT_FALLBACK_PROJECT_ID = "fire-factory";
@@ -412,6 +417,124 @@ export function updateEnvFile(
   return false;
 }
 
+export function configureRepository(
+  repoRoot: string,
+  settings: {
+    projectId: string;
+    projectName: string;
+    region: string;
+    skipLocalEnvs?: boolean;
+  }
+): string[] {
+  const {projectId, projectName, region} = settings;
+  const modified: string[] = [];
+
+  if (updateFirebaserc(repoRoot, projectId)) {
+    modified.push(".firebaserc");
+  }
+  if (updateFirebaseJson(repoRoot, region)) {
+    modified.push("firebase.json (firestore.location)");
+  }
+  if (updateEnvironmentYaml(repoRoot, projectId, projectName, region)) {
+    modified.push("agent/environment.yaml");
+  }
+  if (updatePackageJson(repoRoot, projectId)) {
+    modified.push("package.json");
+  }
+  const frontendPkg = path.join(repoRoot, "frontend/package.json");
+  if (updateSubpackageJson(frontendPkg, `@${projectId}/frontend`)) {
+    modified.push("frontend/package.json");
+  }
+  const scriptsPkg = path.join(repoRoot, "scripts/package.json");
+  if (updateSubpackageJson(scriptsPkg, `@${projectId}/scripts`)) {
+    modified.push("scripts/package.json");
+  }
+
+  const uiUpdates = updateFrontendUi(repoRoot, projectId, projectName);
+  if (uiUpdates.page) modified.push("frontend/app/page.tsx");
+  if (uiUpdates.layout) modified.push("frontend/app/layout.tsx");
+
+  modified.push(...updateCodeDefaults(repoRoot, projectId, region));
+
+  if (updateDockerCompose(repoRoot, projectId)) {
+    modified.push("docker-compose.test.yaml");
+  }
+
+  for (const relPath of [".env.example", "frontend/.env.example", "functions/.env.example"]) {
+    const fullPath = path.join(repoRoot, relPath);
+    if (updateEnvFile(fullPath, projectId, region)) modified.push(relPath);
+  }
+
+  if (!settings.skipLocalEnvs) {
+    const frontendLocal = path.join(repoRoot, "frontend/.env.local");
+    const frontendExample = path.join(repoRoot, "frontend/.env.example");
+    if (fs.existsSync(frontendLocal)) {
+      if (updateEnvFile(frontendLocal, projectId, region)) modified.push("frontend/.env.local");
+    } else if (fs.existsSync(frontendExample)) {
+      fs.writeFileSync(
+        frontendLocal,
+        updateEnvFileContent(fs.readFileSync(frontendExample, "utf8"), projectId, region),
+        "utf8"
+      );
+      modified.push("frontend/.env.local (created from example)");
+    }
+
+    const functionsLocal = path.join(repoRoot, "functions/.env");
+    const functionsExample = path.join(repoRoot, "functions/.env.example");
+    if (fs.existsSync(functionsLocal)) {
+      if (updateEnvFile(functionsLocal, projectId, region)) modified.push("functions/.env");
+    } else if (fs.existsSync(functionsExample)) {
+      fs.writeFileSync(
+        functionsLocal,
+        updateEnvFileContent(fs.readFileSync(functionsExample, "utf8"), projectId, region),
+        "utf8"
+      );
+      modified.push("functions/.env (created from example)");
+    }
+  }
+
+  const rootLocal = path.join(repoRoot, ".env");
+  if (fs.existsSync(rootLocal) && updateEnvFile(rootLocal, projectId, region)) {
+    modified.push(".env");
+  }
+
+  const appHostingPath = path.join(repoRoot, "frontend/apphosting.yaml");
+  if (fs.existsSync(appHostingPath)) {
+    let content = fs.readFileSync(appHostingPath, "utf8");
+    content = content.replace(
+      /(variable:\s*NEXT_PUBLIC_FIREBASE_PROJECT_ID\s*\n\s*value:\s*")[^"]*(")/g,
+      `$1${projectId}$2`
+    );
+    content = content.replace(
+      /(variable:\s*NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN\s*\n\s*value:\s*")[^"]*(")/g,
+      `$1${projectId}.firebaseapp.com$2`
+    );
+    content = content.replace(
+      /(variable:\s*NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET\s*\n\s*value:\s*")[^"]*(")/g,
+      `$1${projectId}.firebasestorage.app$2`
+    );
+    content = content.replace(
+      /(variable:\s*NEXT_PUBLIC_API_BASE_URL\s*\n\s*value:\s*")[^"]*(")/g,
+      `$1https://${region}-${projectId}.cloudfunctions.net/api$2`
+    );
+    fs.writeFileSync(appHostingPath, content, "utf8");
+    modified.push("frontend/apphosting.yaml");
+  }
+
+  const deployWorkflowPath = path.join(repoRoot, ".github/workflows/deploy.yaml");
+  if (fs.existsSync(deployWorkflowPath)) {
+    let content = fs.readFileSync(deployWorkflowPath, "utf8");
+    content = content.replace(
+      /(--project\s+\${{\s*secrets\.FIREBASE_PROJECT_ID\s*\|\|\s*')[^']+('\s*}})/g,
+      `$1${projectId}$2`
+    );
+    fs.writeFileSync(deployWorkflowPath, content, "utf8");
+    modified.push(".github/workflows/deploy.yaml");
+  }
+
+  return modified;
+}
+
 async function main() {
   const explicitProject = (arg("project") ?? arg("id") ?? "").trim().toLowerCase();
   const explicitName = (arg("name") ?? "").trim();
@@ -479,142 +602,12 @@ async function main() {
 
   // eslint-disable-next-line no-console
   console.log(`\nConfiguring Project: ${projectName} (${projectId}) in region [${region}]\n`);
-  const modified: string[] = [];
-
-  // 1. .firebaserc
-  if (updateFirebaserc(REPO_ROOT, projectId)) {
-    modified.push(".firebaserc");
-  }
-
-  // 2. firebase.json (firestore location)
-  if (updateFirebaseJson(REPO_ROOT, region)) {
-    modified.push("firebase.json (firestore.location)");
-  }
-
-  // 3. agent/environment.yaml
-  if (updateEnvironmentYaml(REPO_ROOT, projectId, projectName, region)) {
-    modified.push("agent/environment.yaml");
-  }
-
-  // 4. package.json & workspaces
-  if (updatePackageJson(REPO_ROOT, projectId)) {
-    modified.push("package.json");
-  }
-  const frontendPkg = path.join(REPO_ROOT, "frontend/package.json");
-  if (updateSubpackageJson(frontendPkg, `@${projectId}/frontend`)) {
-    modified.push("frontend/package.json");
-  }
-  const scriptsPkg = path.join(REPO_ROOT, "scripts/package.json");
-  if (updateSubpackageJson(scriptsPkg, `@${projectId}/scripts`)) {
-    modified.push("scripts/package.json");
-  }
-
-  // 5. Frontend UI & layout
-  const uiUpdates = updateFrontendUi(REPO_ROOT, projectId, projectName);
-  if (uiUpdates.page) modified.push("frontend/app/page.tsx");
-  if (uiUpdates.layout) modified.push("frontend/app/layout.tsx");
-
-  // 6. Code defaults & test setups
-  const codeDefaults = updateCodeDefaults(REPO_ROOT, projectId, region);
-  modified.push(...codeDefaults);
-
-  // 7. Docker compose
-  if (updateDockerCompose(REPO_ROOT, projectId)) {
-    modified.push("docker-compose.test.yaml");
-  }
-
-  // 8. Env templates
-  const exampleFiles = [
-    ".env.example",
-    "frontend/.env.example",
-    "functions/.env.example",
-  ];
-  for (const relPath of exampleFiles) {
-    const fullPath = path.join(REPO_ROOT, relPath);
-    if (updateEnvFile(fullPath, projectId, region)) {
-      modified.push(relPath);
-    }
-  }
-
-  // 9. Local frontend and functions envs
-  const skipLocalEnvs = flag("no-env") || flag("skip-env");
-  if (!skipLocalEnvs) {
-    const frontendLocal = path.join(REPO_ROOT, "frontend/.env.local");
-    const frontendExample = path.join(REPO_ROOT, "frontend/.env.example");
-    if (fs.existsSync(frontendLocal)) {
-      if (updateEnvFile(frontendLocal, projectId, region)) {
-        modified.push("frontend/.env.local");
-      }
-    } else if (fs.existsSync(frontendExample)) {
-      const content = updateEnvFileContent(
-        fs.readFileSync(frontendExample, "utf8"),
-        projectId,
-        region
-      );
-      fs.writeFileSync(frontendLocal, content, "utf8");
-      modified.push("frontend/.env.local (created from example)");
-    }
-
-    const functionsLocal = path.join(REPO_ROOT, "functions/.env");
-    const functionsExample = path.join(REPO_ROOT, "functions/.env.example");
-    if (fs.existsSync(functionsLocal)) {
-      if (updateEnvFile(functionsLocal, projectId, region)) {
-        modified.push("functions/.env");
-      }
-    } else if (fs.existsSync(functionsExample)) {
-      const content = updateEnvFileContent(
-        fs.readFileSync(functionsExample, "utf8"),
-        projectId,
-        region
-      );
-      fs.writeFileSync(functionsLocal, content, "utf8");
-      modified.push("functions/.env (created from example)");
-    }
-  }
-
-  // 10. Root .env if present
-  const rootLocal = path.join(REPO_ROOT, ".env");
-  if (fs.existsSync(rootLocal)) {
-    if (updateEnvFile(rootLocal, projectId, region)) {
-      modified.push(".env");
-    }
-  }
-
-  // 11. frontend/apphosting.yaml if present
-  const appHostingPath = path.join(REPO_ROOT, "frontend/apphosting.yaml");
-  if (fs.existsSync(appHostingPath)) {
-    let content = fs.readFileSync(appHostingPath, "utf8");
-    content = content.replace(
-      /(variable:\s*NEXT_PUBLIC_FIREBASE_PROJECT_ID\s*\n\s*value:\s*")[^"]*(")/g,
-      `$1${projectId}$2`
-    );
-    content = content.replace(
-      /(variable:\s*NEXT_PUBLIC_FIREBASE_AUTH_DOMAIN\s*\n\s*value:\s*")[^"]*(")/g,
-      `$1${projectId}.firebaseapp.com$2`
-    );
-    content = content.replace(
-      /(variable:\s*NEXT_PUBLIC_FIREBASE_STORAGE_BUCKET\s*\n\s*value:\s*")[^"]*(")/g,
-      `$1${projectId}.firebasestorage.app$2`
-    );
-    content = content.replace(
-      /(variable:\s*NEXT_PUBLIC_API_BASE_URL\s*\n\s*value:\s*")[^"]*(")/g,
-      `$1https://${region}-${projectId}.cloudfunctions.net/api$2`
-    );
-    fs.writeFileSync(appHostingPath, content, "utf8");
-    modified.push("frontend/apphosting.yaml");
-  }
-
-  // 12. .github/workflows/deploy.yaml if present
-  const deployWorkflowPath = path.join(REPO_ROOT, ".github/workflows/deploy.yaml");
-  if (fs.existsSync(deployWorkflowPath)) {
-    let content = fs.readFileSync(deployWorkflowPath, "utf8");
-    content = content.replace(
-      /(--project\s+\${{\s*secrets\.FIREBASE_PROJECT_ID\s*\|\|\s*')[^']+('\s*}})/g,
-      `$1${projectId}$2`
-    );
-    fs.writeFileSync(deployWorkflowPath, content, "utf8");
-    modified.push(".github/workflows/deploy.yaml");
-  }
+  const modified = configureRepository(REPO_ROOT, {
+    projectId,
+    projectName,
+    region,
+    skipLocalEnvs: flag("no-env") || flag("skip-env"),
+  });
 
   // eslint-disable-next-line no-console
   console.log("Updated files across repository:");
@@ -625,33 +618,9 @@ async function main() {
 
   // eslint-disable-next-line no-console
   console.log(
-    `\nSuccessfully configured repository for "${projectName}" (${projectId}) in region ${region}.`
+    `\nRepository files now point at "${projectName}" (${projectId}) in region ${region}.`
   );
-  // eslint-disable-next-line no-console
-  console.log("\nNext steps in product lifecycle:");
-  // eslint-disable-next-line no-console
-  console.log(
-    "  1. Fill in your Firebase web credentials in frontend/.env.local (API key, App ID, etc.)"
-  );
-  // eslint-disable-next-line no-console
-  console.log("  2. Run 'npm test' to verify test suites");
-  // eslint-disable-next-line no-console
-  console.log(
-    "  3. Create your first admin with: npm run create-admin -- --email=you@example.com"
-  );
-  // eslint-disable-next-line no-console
-  console.log(
-    "  4. Set up GitHub CI/CD & App Hosting deployments with: npm run setup-github"
-  );
-  // eslint-disable-next-line no-console
-  console.log(
-    "  5. Deploy base skeleton (via GitHub push or: npm run deploy:base)"
-  );
-  // eslint-disable-next-line no-console
-  console.log(
-    "  6. Define product in agent/SPEC.md §1.4, generate remaining steps, finish & deploy, enter maintenance"
-  );
-
+  let launchedGithub = false;
   const shouldPromptGithub = isInteractive && process.stdin.isTTY && !flag("no-prompt-github");
   if (shouldPromptGithub) {
     const runGithub = await confirm(
@@ -659,14 +628,44 @@ async function main() {
       true
     );
     if (runGithub) {
+      launchedGithub = true;
       // eslint-disable-next-line no-console
       console.log("\nLaunching GitHub deployment setup...\n");
-      spawnSync("npm", ["run", "setup-github"], {
-        cwd: REPO_ROOT,
-        stdio: "inherit",
-      });
+      const child = spawnSync(
+        "npm",
+        [
+          "run",
+          "setup-github",
+          "--",
+          `--project=${projectId}`,
+          `--region=${region}`,
+          `--name=${projectName}`,
+          "--run",
+        ],
+        {cwd: REPO_ROOT, stdio: "inherit"}
+      );
+      if ((child.status ?? 1) !== 0) process.exit(child.status ?? 1);
     }
   }
+
+  if (!launchedGithub && !flag("files-only")) {
+    await provisionFirebaseProject({
+      projectId,
+      projectName,
+      region,
+      repoRoot: REPO_ROOT,
+      interactive: isInteractive && Boolean(process.stdin.isTTY),
+    });
+  }
+
+  // eslint-disable-next-line no-console
+  console.log("\nNext steps:");
+  // eslint-disable-next-line no-console
+  console.log("  1. Create your first admin: npm run create-admin -- --email=you@example.com");
+  // eslint-disable-next-line no-console
+  console.log("  2. Deploy the base: push to main, or npm run deploy:base");
+  // eslint-disable-next-line no-console
+  console.log("  3. Define the product in agent/SPEC.md §1.4");
 }
 
 if (require.main === module) {

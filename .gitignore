@@ -33,6 +33,7 @@ functions/.env
 frontend/.env.local
 scripts/*-firebase-adminsdk-*.json
 **/*firebase-adminsdk*.json
+github-key.json
 
 # Build output
 frontend/.next/

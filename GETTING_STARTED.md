@@ -46,9 +46,10 @@ npm run set-project
 - Prompts for your Firebase project ID, App Name, and Data Center Region.
 - Automatically updates `.firebaserc`, `firebase.json` Firestore location, `package.json`, `agent/environment.yaml`, and code templates.
 - Generates `frontend/.env.local` and `functions/.env` from examples.
-- At the end of the interactive prompt, seamlessly offers to launch Step 3 (`setup-github`).
+- Provisions the existing Blaze project: registers a Web app, enables email/password sign-in, creates the default Firestore database and Storage bucket, and grants the GitHub deployer the roles a first Functions deploy needs. Web keys land in `frontend/.env.local`.
+- At the end of the interactive prompt, offers to launch Step 3 (`setup-github`).
 
-Fill in your web credentials in `frontend/.env.local` (`NEXT_PUBLIC_FIREBASE_API_KEY`, `NEXT_PUBLIC_FIREBASE_APP_ID`, etc.) from the Firebase Console web app settings.
+`gcloud` must be logged in as an owner of that project. The script starts `gcloud auth login` when it cannot see the project. Pass `--files-only` to rewrite files and skip every cloud call.
 
 ---
 
@@ -60,13 +61,13 @@ Set up automated GitHub Actions CI/CD and Firebase App Hosting deployments:
 npm run setup-github
 ```
 
-- Generates `.github/workflows/ci.yaml`, `.github/workflows/deploy.yaml`, and `frontend/apphosting.yaml`.
+- Stamps the project id through the repo, then runs the same cloud provisioning as `set-project`.
+- Generates `.github/workflows/ci.yaml`, `.github/workflows/deploy.yaml`, and `frontend/apphosting.yaml` (including the web API key and app id).
 - Generates a standalone execution script `scripts/bootstrap/setup-deployments.sh`.
-- Offers to execute all setup steps automatically:
-  - Commits and pushes initial repo files to GitHub `main`.
-  - Creates the Google Cloud `github-deployer` service account and binds deployment IAM roles.
-  - Automatically copies the service account key to your clipboard (or sets repository secret `FIREBASE_SERVICE_ACCOUNT` via `gh`).
-  - Sets up the Firebase App Hosting backend for `web` via `firebase apphosting:backends:create`.
+- Offers to execute the remaining steps:
+  - Commits and pushes the repo to GitHub `main`.
+  - Creates `github-deployer`, grants deploy roles, and sets the `FIREBASE_SERVICE_ACCOUNT` secret when `gh` is logged in.
+  - Creates the App Hosting backend `web`. The Firebase CLI opens a browser once to authorize the GitHub repository.
 
 ---
 

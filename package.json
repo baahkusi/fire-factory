@@ -20,7 +20,7 @@
     "emulators:down": "docker compose -f docker-compose.test.yaml down -v",
     "emulators:logs": "docker compose -f docker-compose.test.yaml logs -f",
     "lint": "npm --prefix frontend run lint && npm run lint --workspace=functions && npm run lint --workspace=scripts",
-    "test": "npm --prefix frontend run test && npm run test --workspace=functions",
+    "test": "npm --prefix frontend run test && npm run test --workspace=functions && npm run test --workspace=scripts",
     "test:emulator": "FIRESTORE_EMULATOR_HOST=127.0.0.1:8080 FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 STORAGE_EMULATOR_HOST=127.0.0.1:9199 FB_PROJECT_ID=fire-factory-si npm run test --workspace=functions",
     "typecheck": "npm --prefix frontend run typecheck && npm run typecheck --workspace=functions && npm run typecheck --workspace=scripts",
     "deploy:base": "firebase deploy --only firestore:rules,firestore:indexes,storage,functions",
@@ -31,6 +31,7 @@
     "production-posture": "npm run production-posture --workspace=scripts --",
     "set-project": "npm run set-project --workspace=scripts --",
     "setup-github": "npm run setup-github --workspace=scripts --",
+    "provision": "npm run provision --workspace=scripts --",
     "install:all": "npm install && npm --prefix frontend install"
   },
   "devDependencies": {

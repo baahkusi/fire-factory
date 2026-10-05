@@ -19,20 +19,19 @@ npm run set-project
 - Interactively prompts for your **Firebase project ID**, **Display Name**, and **Data Center Region**.
 - Automatically configures `.firebaserc`, `firebase.json`, package manifests, agent configuration, and templates.
 - Creates `frontend/.env.local` and `functions/.env` from `.env.example`.
+- When `gcloud` can see the project, provisions the Blaze project: Web app config, email/password Auth, the default Firestore database, the default Storage bucket, and the GitHub deployer roles. The web keys are written into `frontend/.env.local`.
 - *(Non-interactive option: `npm run set-project -- --project=your-id --name="App Name" --region=us-central1`)*
-
-> [!TIP]
-> Copy your Firebase web credentials (`NEXT_PUBLIC_FIREBASE_*`) from the Firebase Console into `frontend/.env.local`.
+- File edits only, no cloud calls: add `--files-only`.
 
 ### 3. Configure GitHub Deployments & App Hosting
 ```bash
 npm run setup-github
 ```
-- Generates GitHub Actions CI/CD workflows and Firebase App Hosting configuration (`frontend/apphosting.yaml`).
+- Generates GitHub Actions CI/CD workflows and Firebase App Hosting configuration (`frontend/apphosting.yaml`), including the web API key and app id.
 - **Auto-installs missing tools:** If `gcloud` or `firebase` CLI are missing, the script will prompt and offer to install them for you automatically.
-- Automates Google Cloud service account provisioning, IAM deployment roles, and secrets.
+- Provisions the same cloud resources as `set-project` if they are not already there, then stores the deployer key as `FIREBASE_SERVICE_ACCOUNT`.
 - Commits and pushes the initial branch to GitHub `main`.
-- Connects Firebase App Hosting directly via CLI (`firebase apphosting:backends:create`).
+- Connects Firebase App Hosting with `firebase apphosting:backends:create`. The first run opens a browser so you can authorize the GitHub repository.
 
 ---
 
@@ -111,7 +110,7 @@ firebase deploy --only functions
 ## Troubleshooting
 
 - **Missing CLI tools (`gcloud` / `firebase`):** `npm run setup-github` detects missing CLI binaries and offers to install them directly (via Homebrew on macOS or official installers on Linux).
-- **Health works, sign-in fails:** Ensure Firebase web keys in `frontend/.env.local` or emulator hosts are filled in.
+- **Health works, sign-in fails:** Re-run `npm run provision -- --project=<id>`. Email/password Auth and `frontend/.env.local` are filled by that command. For the hosted app, the same values belong in `frontend/apphosting.yaml`.
 - **API returns 401 on valid token:** Verify `FB_PROJECT_ID` in `functions/.env` matches the project issuing your ID tokens.
 - **Admin role not reflected in UI:** Sign out and sign back in to refresh ID token custom claims.
 - **Emulator container error:** Run `npm run emulators:logs`. Run `npm run emulators:down` to clear the persistent volume if necessary.
