@@ -159,24 +159,6 @@ body:has(.landing) main {
     var(--paper);
 }
 
-.landing-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 1rem;
-  padding: 1.1rem 1.25rem;
-  padding-right: 16.5rem;
-}
-
-.landing-bar nav {
-  margin: 0;
-  align-items: center;
-}
-
-.landing-bar .meta {
-  margin: 0;
-}
-
 .fire-stage {
   position: relative;
   flex: 1;
@@ -191,9 +173,13 @@ body:has(.landing) main {
   display: block;
 }
 
-.landing-title {
-  margin: 0;
+.landing-foot {
   padding: 0 1.25rem 2.5rem;
+  text-align: center;
+}
+
+.landing-title {
+  margin: 0 0 0.75rem;
   text-align: center;
   font-size: 1.15rem;
   font-weight: 500;
@@ -207,11 +193,7 @@ body:has(.landing) main {
     right: 0.85rem;
   }
 
-  .landing-bar {
-    padding-right: 1.25rem;
-  }
-
-  .landing-title {
+  .landing-foot {
     padding-bottom: 5rem;
   }
 }
