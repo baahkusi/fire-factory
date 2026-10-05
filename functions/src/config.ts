@@ -28,7 +28,10 @@ export const AppConfig = {
   apiRateLimitMax: 120,
   apiRateLimitWindowMs: 60_000,
   serviceName: "fire-factory",
-  region: process.env.FUNCTION_REGION?.trim() || "us-central1",
+  region:
+    process.env.FB_FUNCTION_REGION?.trim() ||
+    process.env.FUNCTION_REGION?.trim() ||
+    "us-central1",
   projectId:
     process.env.FB_PROJECT_ID?.trim() ||
     process.env.GCLOUD_PROJECT?.trim() ||

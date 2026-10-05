@@ -141,9 +141,9 @@ export function updateEnvFileContent(
 ): string {
   let updated = content;
 
-  // FUNCTION_REGION=...
+  // FB_FUNCTION_REGION=...
   updated = updated.replace(
-    /^(\s*FUNCTION_REGION=)[^\r\n]*/m,
+    /^(\s*(?:FB_)?FUNCTION_REGION=)[^\r\n]*/m,
     `$1${region}`
   );
 
@@ -336,7 +336,7 @@ export function updateCodeDefaults(
       `$1${projectId}$2`
     );
     content = content.replace(
-      /(region:\s*process\.env\.FUNCTION_REGION\?\.trim\(\)\s*\|\|\s*")[^"]*(")/,
+      /(region:\s*(?:process\.env\.(?:FB_)?FUNCTION_REGION\?\.trim\(\)\s*\|\|\s*)+")[^"]*(")/,
       `$1${region}$2`
     );
     fs.writeFileSync(configPath, content, "utf8");

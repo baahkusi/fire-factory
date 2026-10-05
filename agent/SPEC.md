@@ -79,7 +79,7 @@ checkout of the repo runs with no credentials. That process is not production.
 - `firebase-admin` on the server. Firebase JS SDK in the browser.
 - Cloud Functions v2 `onRequest`. CORS is enforced by the Express app
   (`cors: false` on the function so the platform does not add a second policy).
-- Region default `us-central1` (`FUNCTION_REGION`). Firestore location default
+- Region default `us-central1` (`FB_FUNCTION_REGION`). Firestore location default
   `us-central1` in `firebase.json`. Change the database location before first
   create.
 
@@ -296,7 +296,7 @@ for that step. Maintenance is a human declaration, one file per request under
 | Variable | Where | Meaning |
 |----------|-------|---------|
 | `FB_PROJECT_ID` | functions, scripts | Firebase project id. Fallback `fire-factory`. |
-| `FUNCTION_REGION` | functions | Cloud Functions region. Default `us-central1`. |
+| `FB_FUNCTION_REGION` | functions | Cloud Functions region (fallback to GCP `FUNCTION_REGION`). Default `us-central1`. |
 | `ALLOWED_ORIGINS` | functions | Comma-separated browser origins. |
 | `PUBLIC_SITE_URL` | functions | Extra allowed origin. |
 | `USE_MEMORY_STORE` | functions | `1` selects memory. Forbidden in production. |

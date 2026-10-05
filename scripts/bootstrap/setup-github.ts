@@ -533,6 +533,7 @@ if command -v gcloud >/dev/null 2>&1; then
   else
     echo "→ Checking Google Cloud APIs..."
     REQUIRED_APIS=(
+      cloudfunctions.googleapis.com
       firebaseapphosting.googleapis.com
       developerconnect.googleapis.com
       run.googleapis.com
@@ -895,6 +896,7 @@ async function main() {
 
         if (hasProjectAccess) {
           const requiredApis = [
+            "cloudfunctions.googleapis.com",
             "firebaseapphosting.googleapis.com",
             "developerconnect.googleapis.com",
             "run.googleapis.com",
