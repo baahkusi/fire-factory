@@ -82,6 +82,7 @@ export const REQUIRED_APIS = [
   "firebaseapphosting.googleapis.com",
   "developerconnect.googleapis.com",
   "secretmanager.googleapis.com",
+  "cloudbilling.googleapis.com",
 ];
 
 /** Roles the GitHub Actions deployer needs for rules, indexes, and gen2 functions. */
