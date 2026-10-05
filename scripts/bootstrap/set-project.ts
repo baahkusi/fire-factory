@@ -620,6 +620,12 @@ async function main() {
   console.log(
     `\nRepository files now point at "${projectName}" (${projectId}) in region ${region}.`
   );
+
+  try {
+    execSync("npm install --package-lock-only", { cwd: REPO_ROOT, stdio: "ignore" });
+  } catch {
+    // ignore
+  }
   let launchedGithub = false;
   const shouldPromptGithub = isInteractive && process.stdin.isTTY && !flag("no-prompt-github");
   if (shouldPromptGithub) {
