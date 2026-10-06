@@ -75,6 +75,11 @@ export const REQUIRED_APIS = [
   "cloudbuild.googleapis.com",
   "artifactregistry.googleapis.com",
   "run.googleapis.com",
+  // The Firebase CLI enables these before a gen2 functions deploy, including
+  // the Extensions API when the project defines no extensions.
+  "eventarc.googleapis.com",
+  "pubsub.googleapis.com",
+  "firebaseextensions.googleapis.com",
   "iam.googleapis.com",
   "cloudresourcemanager.googleapis.com",
   "serviceusage.googleapis.com",

@@ -154,6 +154,9 @@ test("provision creates missing cloud resources and writes the web keys", async 
   const enable = calls.find((call) => call[0] === "gcloud" && call[1] === "services" && call[2] === "enable");
   assert.ok(enable?.includes("identitytoolkit.googleapis.com"));
   assert.ok(enable?.includes("firestore.googleapis.com"));
+  assert.ok(enable?.includes("eventarc.googleapis.com"));
+  assert.ok(enable?.includes("pubsub.googleapis.com"));
+  assert.ok(enable?.includes("firebaseextensions.googleapis.com"));
   const bindings = calls.filter((call) => call.includes("add-iam-policy-binding"));
   assert.ok(bindings.some((call) => call.includes("--role=roles/run.admin")));
   assert.ok(bindings.some((call) => call.includes("--role=roles/datastore.indexAdmin")));
