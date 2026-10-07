@@ -9,8 +9,8 @@
     "build": "tsc --project tsconfig.json",
     "build:watch": "tsc --watch",
     "lint": "eslint --ext .ts src test",
-    "dev:api": "ts-node src/local-server.ts",
-    "dev:api:memory": "cross-env USE_MEMORY_STORE=1 ts-node src/local-server.ts",
+    "dev:api": "node --watch-path=src -r ts-node/register src/local-server.ts",
+    "dev:api:memory": "cross-env USE_MEMORY_STORE=1 node --watch-path=src -r ts-node/register src/local-server.ts",
     "test": "vitest run",
     "typecheck": "tsc --project tsconfig.json --noEmit && tsc --project tsconfig.test.json --noEmit",
     "logs": "firebase functions:log"
